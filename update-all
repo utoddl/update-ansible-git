@@ -1,0 +1,242 @@
+#!/bin/bash
+###################################################################
+# Canonical source: https://github.com/utoddl/update-ansible-git/ #
+###################################################################
+
+# This progresses through all the git repos in the current directory and runs
+# the adjacent "update-me" script on each of them.
+
+# NOTE: if your mw-ansible-* projects are NOT in $HOME/tower, then
+#     export MW_ANSIBLE_BASEDIR=/path/to/your/mw-ansible-projects
+# before running this script.
+
+# tput notes:
+#   setaf # "set ANSII forground"
+#         1  red
+#         2  green
+#         3  yellow
+#         4  blue
+#         5  magenta
+#         6  cyan
+#         7  while
+#   bold   enter bold mode
+#   sgr0   turn off all attributes
+#   op     "original pair" of foreground and background colors
+#
+#     Attribute              Bit   Decimal      Set by
+#     A_STANDOUT             0     1            sgr
+#     A_UNDERLINE            1     2            sgr
+#     A_REVERSE              2     4            sgr
+#     A_BLINK                3     8            sgr
+#     A_DIM                  4     16           sgr
+#     A_BOLD                 5     32           sgr
+
+export boldon=${boldon:-$(    tput bold)}
+export boldoff=${boldoff:-$(  tput sgr0)}
+export redon=${redon:-$(      tput setaf 1)}
+export greenon=${greenon:-$(  tput setaf 2)}
+export brownon=${brownon:-$(  tput setaf 3)}
+export coloroff=${coloroff:-$(tput sgr0)}
+export init=${init:-$(        tput init)}
+
+usages() {
+  cat <<-ENDU
+	Usage: $0 [-h] [-q] [-p] [-f] [-t THREADS]
+
+	This progresses through all the git repos in the current directory and runs
+	the adjacent "update-me" script on each of them.
+	
+	  -h   Help: this text
+	  -q   Quick: skip processing of requirements.yml files by passing
+	       the '-q' flag to "update-me".
+	  -p   Pass the '-p' flag to "update-me" to include "-p ./roles/"
+	       or "-p ./collections/" on ansible-galaxy commands.
+	  -f   Pass the '-f' flag to "update-me" to include "--force"
+	       on ansible-galaxy commands.
+	  -d   Debug: enables additional diagnostic messages
+	  -t THREADS Max number of projects to update simultaneously (default: 8)
+	ENDU
+}
+
+quick=''
+debug=''
+pflag=''
+fflag=''
+maxthreads=8
+# OPTERR=0
+while getopts ':qpfdht:' opt "$@"; do
+  case "${opt}" in
+    q ) quick='-q'
+        ;;
+    p ) pflag='-p'
+        ;;
+    f ) fflag='-f'
+        ;;
+    d ) debug='-d'
+        ;;
+    h ) usages
+        (return 0 2>/dev/null) && return 0 || exit 0
+        ;;
+    t ) if [[ "${OPTARG}" =~ ^[1-9][0-9]?$ && "${OPTARG}" -le 32 ]] ; then
+          maxthreads=${OPTARG}
+        else
+          echo "Error: THREADS must be an integer between 1 and 32, not \"${OPTARG}\"." >&2
+          (return 1 2>/dev/null) && return 0 || exit 1
+        fi
+        ;;
+    ? )
+        echo -e "${redon}Unrecoginzed option ${OPTARG}.${coloroff}" >&2
+        (return 0 2>/dev/null) && return 1 || exit 1
+        ;;
+  esac
+done
+
+
+SCRIPT=$(realpath -s "${BASH_SOURCE[0]}")
+# SCRIPTPATH=$(dirname "${SCRIPT}")
+onyen=$(id -n -u)
+
+basedir=${MW_ANSIBLE_BASEDIR:-$HOME/tower}
+if [ ! -d "$basedir" ] ; then
+  echo "The directory '$basedir' doesn't exist."
+  echo "Either export MW_ANSIBLE_BASEDIR or create a"
+  echo "$HOME/tower directory."
+  exit 1;
+fi
+cd "$basedir" || {
+  echo "ERROR: Couldn't cd to '$basedir'; Exiting." >&2
+  exit 1
+}
+
+# Subprocesses should only write to stdout when they "hold the lock".
+lockfile=/tmp/update-all-$$-lock-file
+lockback="${lockfile}.sane"
+: >$lockfile
+update_me_bin="${SCRIPT/%-all/-me}"
+
+function finish {
+  stty sane
+  rm -f $lockfile $lockback
+}
+trap finish EXIT
+
+# This USR1 listener resets the terminal line settings
+# on behalf of child processes.
+mainpid=$$
+function stty_sane {
+  stty sane
+  # local v=( pre-lockback $(ls [0-9]*) )
+  # echo "** ${v[@]}"
+  : >$lockback
+  # v=( pos-lockback $(ls [0-9]*) )
+  # echo "** ${v[@]}"
+}
+trap stty_sane USR1
+
+do_project() {
+  # Because we are running in a separate thread, shove all our
+  # output into a tmp file, then blurt it all out at the end
+  # in one go. That way we're less likely to be interleaved with
+  # output from other threads.
+  local tmp
+  tmp="$(mktemp --tmpdir=/tmp update-all.XXXXXXXXXX)"
+  local d="${1:-.}"
+
+  ( echo "${boldon}========= $d ==========${boldoff}"
+    if cd "$d" ; then
+       declare -a gclcred
+       while read -r cred ; do
+         echo "Stashing local git config «$cred»."
+         gclcred+=( $cred )
+       done < <( git config --local --get-regex credential..* )
+       git config --local credential.useHttpPath true
+       git config --local credential.helper cache
+       mapfile -t urls < <( (for r in $(git remote) ; do git remote get-url "$r" ; done) | sort -u)
+       for url in "${urls[@]}" ; do
+          echo "Caching credentials for url: «$url»"
+          echo -e "url=${url}\nusername=${onyen}\npassword=${password}\n\n" | \
+            git credential fill | git credential approve
+       done
+       setsid -w "$update_me_bin" $quick $pflag $fflag $debug
+       git config --local --unset credential.useHttpPath
+       git config --local --unset credential.helper
+       for cred in "${gclcred[@]}" ; do
+          echo "Restoring local git config «$cred»."
+          git config --local $cred
+       done
+    else
+       echo "failed to 'cd $d' -- $?"
+    fi
+    cd "$basedir" || echo
+    echo ) >> "$tmp" 2>&1
+
+  # v=( $d pst-update-me $(ls [0-9]*) )
+  # echo "${v[@]}" >> /tmp/foo
+
+  exec 4>$lockfile
+
+  flock -w 5 4
+
+  # Signal the master process to reset the tty parameters, then wait
+  # up to 5 seconds for this to happen before proceeding.
+  kill -s USR1 $mainpid
+  locktimeout=$((SECONDS + 5))
+  while ! test -f $lockback ; do
+    sleep 0.25
+    if [ "$SECONDS" -gt "$locktimeout" ] ; then
+      break
+    fi
+  done
+  sed  "s/^\(.\)/${d}: \1/" < "$tmp"
+  rm -f "$tmp"
+  flock -u 4
+  : 4>&-
+}
+
+declare -a projects=()
+while read -r dir ; do
+  if [ -d "$dir/.git" ] ; then
+    projects+=("$dir")
+  fi
+done < <(find . -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort )
+
+# We'll need to push this password into the credential cache.
+gltoken=${GITLAB_PRIVATE_TOKEN:-~/.gitlab/private-token}
+if [ -r "$gltoken" ] ; then
+  ptmode=$(stat -c "%a" "${gltoken}")
+  if [ "$ptmode" != 400 ] && [ "$ptmode" != 600 ] ; then
+    echo "The permissions for '$brownon${gltoken}$coloroff' are unacceptable."
+    echo "(To fix: \"${boldon}chmod u-x,go-rwx ${gltoken}${boldoff}\")"
+    exit 1;
+  fi
+  echo "Using token from ${brownon}${gltoken}${coloroff}."
+  password=$(cat "$gltoken")
+else
+  IFS= read -r -s -p "Password for '${onyen}': " password
+fi
+
+# Work on a slice of the projects array during testing.
+# projects=( "${projects[@]:12:2}" )
+
+# Do all the projects in $maxthreads sized chunks.
+running=0
+while [ "${#projects[@]}" -gt 0 ] ; do
+  next_prj=${projects[0]}
+  projects=( "${projects[@]:1}" )
+  do_project "$next_prj" &
+  ((running++))
+  # echo "** ${#projects[@]} projects remaining; $running running **"
+  while [ "$running" -ge "$maxthreads" ] ; do
+    wait -n
+    if [ $? -lt 128 ] ; then
+      ((running--))
+    fi
+  done
+done
+while [ "$running" -gt 0 ] ; do
+  # echo "** ${#projects[@]} projects remaining; $running running **"
+  wait -n
+  if [ $? -lt 128 ] ; then
+    ((running--))
+  fi
+done
