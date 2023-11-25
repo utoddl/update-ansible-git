@@ -1,0 +1,220 @@
+#!/bin/bash
+###################################################################
+# Canonical source: https://github.com/utoddl/update-ansible-git/ #
+###################################################################
+
+# Bring local branches up-to-date with their corresponding remotes.
+# If there are any roles/requirements.yml or collections/requirements.yml
+# files in the current branch, then use the ansible-galaxy command
+# to pull those requirements in as well.
+
+# This should be generic enough to run on any git repo.
+
+# tput notes:
+#   setaf # "set ANSII forground"
+#         1  red
+#         2  green
+#         3  yellow
+#         4  blue
+#         5  magenta
+#         6  cyan
+#         7  while
+#   bold   enter bold mode
+#   sgr0   turn off all attributes
+#   op     "original pair" of foreground and background colors
+#
+#     Attribute              Bit   Decimal      Set by
+#     A_STANDOUT             0     1            sgr
+#     A_UNDERLINE            1     2            sgr
+#     A_REVERSE              2     4            sgr
+#     A_BLINK                3     8            sgr
+#     A_DIM                  4     16           sgr
+#     A_BOLD                 5     32           sgr
+
+export boldon=${boldon:-$(    tput bold)}
+export boldoff=${boldoff:-$(  tput sgr0)}
+export redon=${redon:-$(      tput setaf 1)}
+export greenon=${greenon:-$(  tput setaf 2)}
+export brownon=${brownon:-$(  tput setaf 3)}
+export coloroff=${coloroff:-$(tput sgr0)}
+export init=${init:-$(        tput init)}
+
+usages() {
+  cat <<-ENDU
+	Usage: $0 [-h] [-q] [-p] [-f] [-d] [-x]
+
+	Bring local branches up-to-date with their corresponding remotes.
+	If there are any roles/requirements.yml or collections/requirements.yml
+	files in the current branch, then use the ansible-galaxy command
+	to pull those requirements in as well.
+	
+	  -h   Help: this text
+	  -q   Quick: skip processing of requirements.yml files.
+	  -p   Include "-p ./roles/" or "-p ./collections/" on ansible-galaxy commands.
+	  -f   Include "--force" on ansible-galaxy commands.
+	  -d   Debug: enables more diagnostic messages.
+	  -x   Sets the -x flag; eXtremely verbose messaging
+	ENDU
+}
+
+quick=''
+rolespath=''
+collectionspath=''
+fflag=''
+debug=''
+# OPTERR=0
+while getopts ':hqpfxd' opt "$@"; do
+  case "${opt}" in
+    q ) quick=1
+        ;;
+    p ) rolespath='-p ./roles/'
+        collectionspath='-p ./collections/'
+        ;;
+    f ) fflag='--force'
+        ;;
+    h ) usages
+        (return 0 2>/dev/null) && return 0 || exit 0
+        ;;
+    d ) debug=1
+        ;;
+    x ) set -x
+        ;;
+    ? )
+        echo -e "${redon}Unrecoginzed option ${OPTARG}.${coloroff}" >&2
+        (return 0 2>/dev/null) && return 1 || exit 1
+        ;;
+  esac
+done
+
+echo "$0"
+
+# The point of vrun() is to highlight commands as they are run,
+# and to highlight the output from those commands.
+# The commands are run in a subshell -- hence the ( ... ).
+# stdout gets diverted through &3 so that stderr can pipe through
+# sed as stdin to wrap the errors in brown. Output from sed
+# goes back to &2 and 3 goes back to &1.
+pwdbase=$(basename "$(pwd)")
+function vrun() {
+  echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
+  (set -o pipefail
+   "${@}"  2>&1 >&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$',' >&2
+  ) 3>&1
+}
+
+function vrunz() {
+  echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
+  ( set -o pipefail
+   timeout -v --foreground --kill-after=60 45 "${@}"  2>&1 >&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$',' >&2
+  ) 3>&1
+}
+
+function vruns() {
+  local tries=0
+  local rc=0
+  local max_tries=10
+  while [ $tries -lt $max_tries ] ; do
+    tries=$(( tries + 1 ))
+    vrunz "${@}"
+    rc=$?
+    if ! [[ "$rc" =~ ^(124|137)$ ]] ; then
+      [ -n "$debug" ] && echo "${greenon}vrunz rc ${rc} didn't match '^(124|137)$'; returning $rc.${coloroff}" >&2
+      return $rc
+    fi
+    [ -n "$debug" ] && echo "${redon}vrunz rc ${rc} did match '^(124|137)$'; retrying ($tries).${coloroff}" >&2
+    echo "${brownon}operation timed out; retrying ($tries of $max_tries).${coloroff}" >&2
+    sleep $(( 2 * tries ))
+  done
+  [ -n "$debug" ] && echo "${redon}vruns returning ${rc}.${coloroff}" >&2
+  return $rc
+}
+
+# shellcheck disable=SC1091  # (info): Not following: ./git-sh-setup was not specified as input (see shellcheck -x).
+. "$(git --exec-path)/git-sh-setup"
+
+if ! git rev-parse --git-dir 2> /dev/null >&2 ; then
+  echo -e "${brownon}Is this a git repo ($(pwd))? Stopping.${coloroff}${init}"
+  (return 0 2>/dev/null) && return 1 || exit 1
+  # exit 1
+fi
+
+vrun require_work_tree || {
+  echo -e "${redon}Cannot update in a bare repo (i.e. without a work tree).${coloroff}" >&2
+  (return 0 2>/dev/null) && return 1 || exit 1
+  # exit 1
+}
+vrun require_clean_work_tree || {
+  echo -e "${redon}Cannot update without clean work tree.${coloroff}" >&2
+  (return 0 2>/dev/null) && return 1 || exit 1
+  # exit 1
+}
+cd_to_toplevel
+
+# declare -A role_req_md5 coll_req_md5
+# function cache_requirements_md5() {
+#   set -x
+#   if [ -f roles/requirements.yml -a -z "${role_req_md5[${branch_current}+isset]}" ] ; then
+#       role_req_md5[${branch_current}]=$( md5sum roles/requirements.yml | cut -f 1 -d' ' )
+#   fi
+#   if [ -f collections/requirements.yml -a -z "${coll_req_md5[${branch_current}+isset]}" ] ; then
+#       coll_req_md5[${branch_current}]=$( md5sum collections/requirements.yml | cut -f 1 -d' ' )
+#   fi
+#   set +x
+# }
+
+branch_initial=$(git rev-parse --abbrev-ref HEAD)
+branch_current=$branch_initial
+branch_final=${branch_initial-master}
+
+# cache_requirements_md5
+
+for remote in $(git remote) ; do
+  vruns git remote prune "$remote" || {
+    echo -e "${redon}Problem accessing remote '$remote'; stopping.${coloroff}" >&2
+    (return 0 2>/dev/null) && return 1 || exit 1
+    # exit 1
+  }
+done
+
+for branch in $(git for-each-ref '--format=%(refname:short)' refs/heads) ; do
+  if ( [[ "$branch_current" = "$branch" ]] && \
+      echo -e "${brownon}On branch '$branch'${coloroff}") || vruns git checkout "$branch" ; then
+    branch_current="$branch"
+    # cache_requirements_md5
+    branch_remote=$( git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null )  # likely 'remote/origin'
+    if [ -n "$branch_remote" ] ; then           # This branch has an associated remote.
+      if vruns git pull ; then
+        # Pull in the roles and collections requirements.yml bit
+        # only on a branch that is the default for a remote.
+        # There's normally only one of these.
+                                        # shellcheck disable=SC2046  # Left unquoted to enable word splitting
+        # shellcheck disable=SC2034  # Unused variables left for readability
+        branch_remote_default=$( set -- $(git ls-remote --symref "${branch_remote%/*}" HEAD); test "$1" = "ref:"  && echo "$2" )
+      fi
+    else
+      echo -e "${brownon}No upstream for branch '$branch'${coloroff}" >&2
+    fi
+  else
+    echo -e "${redon}Skipping branch '$branch' due to errors${coloroff}" >&2
+  fi
+done
+
+# Switch to the desired branch to leave checked out.
+if [ "$branch_current" != "${branch_initial:-${branch_final}}" ] ; then
+  vruns git checkout "${branch_initial:-${branch_final}}"
+fi
+branch_final=$(git rev-parse --abbrev-ref HEAD)
+if [ -z "$quick" ] ; then
+  if [ -f roles/requirements.yml ] ; then
+    force=$fflag  # '--force'
+    vruns ansible-galaxy install -r roles/requirements.yml $rolespath $force
+  fi
+
+  if [ -f collections/requirements.yml ] ; then
+    force="$fflag"  # '--force' maybe '--force-with-deps' someday.
+    # export ANSIBLE_COLLECTIONS_PATH=./collections
+    vruns ansible-galaxy collection install -r collections/requirements.yml $collectionspath $force
+  fi
+fi
+
+echo -e "${boldon}Note:${boldoff} Final branch: ${greenon}$branch_final${coloroff}${init}"
