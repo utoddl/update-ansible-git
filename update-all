@@ -1,10 +1,11 @@
 #!/bin/bash
 ###################################################################
 # Canonical source: https://github.com/utoddl/update-ansible-git/ #
+# File: ./update-all                                              #
 ###################################################################
 
-# This progresses through all the git repos in the current directory and runs
-# the adjacent "update-me" script on each of them.
+# This progresses through all the git repos in the current directory
+# and runs the adjacent "update-me" script on each of them.
 
 # NOTE: if your mw-ansible-* projects are NOT in $HOME/tower, then
 #     export MW_ANSIBLE_BASEDIR=/path/to/your/mw-ansible-projects
