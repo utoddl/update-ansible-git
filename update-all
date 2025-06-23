@@ -55,7 +55,7 @@ usages() {
 	  -f   Pass the '-f' flag to "update-me" to include "--force"
 	       on ansible-galaxy commands.
 	  -d   Debug: enables additional diagnostic messages
-	  -t THREADS Max number of projects to update simultaneously (default: 8)
+	  -t THREADS Max number of projects to update simultaneously (default: 5)
 	ENDU
 }
 
@@ -63,7 +63,7 @@ quick=''
 debug=''
 pflag=''
 fflag=''
-maxthreads=8
+maxthreads=5
 # OPTERR=0
 while getopts ':qpfdht:' opt "$@"; do
   case "${opt}" in
@@ -112,12 +112,12 @@ cd "$basedir" || {
 # Subprocesses should only write to stdout when they "hold the lock".
 lockfile=/tmp/update-all-$$-lock-file
 lockback="${lockfile}.sane"
-: >$lockfile
+: >"$lockfile"
 update_me_bin="${SCRIPT/%-all/-me}"
 
 function finish {
   stty sane
-  rm -f $lockfile $lockback
+  rm -f "$lockfile" "$lockback"
 }
 trap finish EXIT
 
@@ -128,7 +128,7 @@ function stty_sane {
   stty sane
   # local v=( pre-lockback $(ls [0-9]*) )
   # echo "** ${v[@]}"
-  : >$lockback
+  : >"$lockback"
   # v=( pos-lockback $(ls [0-9]*) )
   # echo "** ${v[@]}"
 }
@@ -148,7 +148,7 @@ do_project() {
        declare -a gclcred
        while read -r cred ; do
          echo "Stashing local git config «$cred»."
-         gclcred+=( $cred )
+         gclcred+=( "$cred" )
        done < <( git config --local --get-regex credential..* )
        git config --local credential.useHttpPath true
        git config --local credential.helper cache
@@ -163,7 +163,7 @@ do_project() {
        git config --local --unset credential.helper
        for cred in "${gclcred[@]}" ; do
           echo "Restoring local git config «$cred»."
-          git config --local $cred
+          git config --local "$cred"
        done
     else
        echo "failed to 'cd $d' -- $?"
@@ -174,7 +174,7 @@ do_project() {
   # v=( $d pst-update-me $(ls [0-9]*) )
   # echo "${v[@]}" >> /tmp/foo
 
-  exec 4>$lockfile
+  exec 4>"$lockfile"
 
   flock -w 5 4
 
@@ -182,7 +182,7 @@ do_project() {
   # up to 5 seconds for this to happen before proceeding.
   kill -s USR1 $mainpid
   locktimeout=$((SECONDS + 5))
-  while ! test -f $lockback ; do
+  while ! test -f "$lockback" ; do
     sleep 0.25
     if [ "$SECONDS" -gt "$locktimeout" ] ; then
       break
