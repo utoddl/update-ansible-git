@@ -37,6 +37,7 @@ export boldoff=${boldoff:-$(  tput sgr0)}
 export redon=${redon:-$(      tput setaf 1)}
 export greenon=${greenon:-$(  tput setaf 2)}
 export brownon=${brownon:-$(  tput setaf 3)}
+export blueon=${blueon:-$(    tput setaf 4)}
 export coloroff=${coloroff:-$(tput sgr0)}
 export init=${init:-$(        tput init)}
 
@@ -55,7 +56,7 @@ usages() {
 	  -f   Pass the '-f' flag to "update-me" to include "--force"
 	       on ansible-galaxy commands.
 	  -d   Debug: enables additional diagnostic messages
-	  -t THREADS Max number of projects to update simultaneously (default: 5)
+	  -t THREADS Max number of projects to update simultaneously (default: 8)
 	ENDU
 }
 

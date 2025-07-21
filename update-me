@@ -37,6 +37,7 @@ export boldoff=${boldoff:-$(  tput sgr0)}
 export redon=${redon:-$(      tput setaf 1)}
 export greenon=${greenon:-$(  tput setaf 2)}
 export brownon=${brownon:-$(  tput setaf 3)}
+export blueon=${blueon:-$(    tput setaf 4)}
 export coloroff=${coloroff:-$(tput sgr0)}
 export init=${init:-$(        tput init)}
 
@@ -98,17 +99,39 @@ echo "$0"
 pwdbase=$(basename "$(pwd)")
 function vrun() {
   echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
-  (set -o pipefail
-   "${@}"  2>&1 >&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$',' >&2
+  ( set -o pipefail
+    ( "${@}" | \
+      sed $'s,.*,'"${blueon}"$'&'"${coloroff}"$','
+    ) 2>&1 1>&3- | \
+    sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$','
   ) 3>&1
 }
 
 # vrunz() is like vrun but with timeout constraints.
 function vrunz() {
   echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
-  ( set -o pipefail
-   timeout -v --foreground --kill-after=60 45 "${@}"  2>&1 >&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$',' >&2
-  ) 3>&1
+  # { errors=$(
+  #            set -o pipefail
+  #            timeout -v --foreground --kill-after=60 45 "${@}"  2>&1 1>&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$','
+  #           );
+  # } 3>&1
+  readarray messages < <(
+                          ( set -o pipefail
+                            ( timeout -v --foreground --kill-after=60 45 "${@}"  | \
+                              sed $'s,.*,'"${blueon}"$'&'"${coloroff}"$','
+                            ) 2>&1 1>&3-  | \
+                            sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$','
+                          ) 3>&1
+                        )
+
+  rcs=$?
+  if [ "${#messages[@]}" -gt 0 ] ; then
+    printf "%s" "${messages[@]}"
+  fi
+  if [[ "${messages[*]}" == *"Connection reset by peer, errno 104"* ]] ; then
+    rcs=104
+  fi
+  return $rcs
 }
 
 # vruns() calls vrunz() with back-off retries in case of command timeouts.
@@ -120,12 +143,12 @@ function vruns() {
     tries=$(( tries + 1 ))
     vrunz "${@}"
     rc=$?
-    if ! [[ "$rc" =~ ^(124|137)$ ]] ; then
-      [ -n "$debug" ] && echo "${greenon}vrunz rc ${rc} didn't match '^(124|137)$'; returning $rc.${coloroff}" >&2
+    if ! [[ "$rc" =~ ^(104|124|137)$ ]] ; then
+      [ -n "$debug" ] && echo "${greenon}vrunz rc ${rc} didn't match '^(104|124|137)$'; returning $rc.${coloroff}" >&2
       return $rc
     fi
-    [ -n "$debug" ] && echo "${redon}vrunz rc ${rc} did match '^(124|137)$'; retrying ($tries).${coloroff}" >&2
-    echo "${brownon}operation timed out; retrying ($tries of $max_tries).${coloroff}" >&2
+    [ -n "$debug" ] && echo "${redon}vrunz rc ${rc} did match '^(104|124|137)$'; retrying ($tries).${coloroff}" >&2
+    echo "${brownon}operation failed (rc=${rc}); retrying ($tries of $max_tries after 'sleep $((2*tries))').${coloroff}" >&2
     sleep $(( 2 * tries ))
   done
   [ -n "$debug" ] && echo "${redon}vruns returning ${rc}.${coloroff}" >&2
