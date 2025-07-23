@@ -210,11 +210,11 @@ for branch_wtp in $(git for-each-ref '--format=%(refname:short):%(worktreepath)'
     continue
   fi
   if ( [[ "$branch_current" = "$branch" ]] && \
-      echo -e "${brownon}On branch '$branch'${coloroff}") || vruns git checkout "$branch" ; then
+      echo -e "${blueon}On branch '$branch'${coloroff}") || vruns git checkout "$branch" ; then
     branch_current="$branch"
     # cache_requirements_md5
     branch_remote=$( git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null )  # likely 'remote/origin'
-    if [ -n "$branch_remote" ] ; then           # This branch has an associated remote.
+    if [[ "$branch_remote" =~ / ]] ; then           # This branch has an associated remote.
       if vruns git pull ; then
         # Pull in the roles and collections requirements.yml bit
         # only on a branch that is the default for a remote.
