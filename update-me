@@ -128,7 +128,7 @@ function vrunz() {
   if [ "${#messages[@]}" -gt 0 ] ; then
     printf "%s" "${messages[@]}"
   fi
-  if [[ "${messages[*]}" == *"Connection reset by peer, errno 104"* ]] ; then
+  if [[ "${messages[*]}" == *"Connection reset by peer"* ]] ; then
     rcs=104
   fi
   return $rcs
