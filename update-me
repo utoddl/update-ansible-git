@@ -59,6 +59,7 @@ usages() {
 	ENDU
 }
 
+pace=0.25 # how long to wait after git ops so as not to flood the server
 quick=''
 rolespath=''
 collectionspath=''
@@ -99,6 +100,7 @@ echo "$0"
 pwdbase=$(basename "$(pwd)")
 function vrun() {
   echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
+  sleep "$pace"
   ( set -o pipefail
     ( "${@}" | \
       sed $'s,.*,'"${blueon}"$'&'"${coloroff}"$','
@@ -110,6 +112,7 @@ function vrun() {
 # vrunz() is like vrun but with timeout constraints.
 function vrunz() {
   echo "${boldon}[${pwdbase}]\$" "${@}" "${boldoff}"
+  sleep "$pace"
   # { errors=$(
   #            set -o pipefail
   #            timeout -v --foreground --kill-after=60 45 "${@}"  2>&1 1>&3 | sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$','
@@ -123,7 +126,6 @@ function vrunz() {
                             sed $'s,.*,'"${brownon}"$'&'"${coloroff}"$','
                           ) 3>&1
                         )
-
   rcs=$?
   if [ "${#messages[@]}" -gt 0 ] ; then
     printf "%s" "${messages[@]}"
